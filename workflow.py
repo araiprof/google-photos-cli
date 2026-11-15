@@ -69,8 +69,15 @@ def record_item_failure(worker, root, state, error, event, *, key, folder):
 
     if state.get("original_key") != key or state.get("account") != worker.account:
         raise RuntimeError("Failed-item journal identity/account mismatch")
-    worker.write(state, error=str(error))
     message, stage = str(error), state.get("stage")
+    transport = {"timed out", "TypeError: Failed to fetch",
+                 "Error: Request deadline exceeded; reconcile writes before retrying",
+                 "HTTP Error 500: Internal Server Error", "HTTP Error 502: Bad Gateway",
+                 "HTTP Error 503: Service Unavailable", "HTTP Error 504: Gateway Timeout"}
+    if stage == "committing" and message in transport and getattr(worker, "continue_on_item_error", False):
+        worker.write(state, commit_transport_error=message)
+        message = "Commit outcome unknown; reconcile using hash"
+    worker.write(state, error=message)
     eligible = False
     backup_required = False
     if getattr(worker, "continue_on_item_error", False) and not state.get("permanent_delete_started"):

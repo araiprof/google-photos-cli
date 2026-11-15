@@ -74,7 +74,6 @@ class Deferral(unittest.TestCase):
             (True,'Unexpected schema',None),
             (True,'Original source is unavailable','trashing'),
             (True,'Video capture date/zone mismatch','trashed'),
-            (True,'TypeError: Failed to fetch','committing'),
         ):
             with self.subTest(message=message,stage=stage), tempfile.TemporaryDirectory() as td:
                 root=Path(td); state=self.unavailable(root); state['stage']=stage
@@ -169,3 +168,16 @@ class Deferral(unittest.TestCase):
             self.assertEqual(result.exception.code,2);complete.assert_not_called()
             self.assertEqual(images.run.call_count,3)
             self.assertFalse(json.loads(out.getvalue())['complete'])
+
+
+    def test_transport_failure_during_commit_keeps_intent_and_requires_hash_lookup(self):
+        for message in ('timed out','TypeError: Failed to fetch'):
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as td:
+                root=Path(td);state,_,_=test_removal.data(root)
+                output=root/'candidate';output.write_bytes(b'candidate')
+                state.update(stage='committing',replacement_key=None,output=str(output),avif_sha256=digest(output))
+                self.assertTrue(self.record(self.worker(root),root,state,message))
+                self.assertEqual(state['stage'],'committing')
+                self.assertEqual(state['error'],'Commit outcome unknown; reconcile using hash')
+                self.assertEqual(state['commit_transport_error'],message)
+                self.assertIsNone(state['replacement_key'])
