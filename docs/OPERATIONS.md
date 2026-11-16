@@ -115,6 +115,8 @@ After unaffected work finishes, the command prints a deferred-item summary and e
 
 ## Verification and performance
 
+When an input has auxiliary Apple APAC spatial audio alongside a default AAC track, encoding maps the other audio tracks explicitly and omits auxiliary APAC. This avoids requiring an unavailable APAC decoder for the existing stereo-compatible audio track. Without a default AAC fallback, the existing audio mapping remains unchanged; audio is never silently removed from an APAC-only source. The complete original file, including every audio track, remains in the local backup.
+
 Scoped audits still scan every active-library page, but refresh metadata only for selected sources/replacements and unknown arrivals. Known unrelated originals and replacements need no metadata refresh. Unfiltered audits refresh every active item. Missing selected replacements and retained sources still fail the audit. A successful video resume clears its previous error only after reaching a verified success stage.
 
 - True-original downloads retry temporary HTTP 429/500/502/503/504 errors, timeouts, connection failures and truncated responses up to four attempts, with a fresh export URL and clean temporary files each time. Permission/host failures and checksum failures in the caller are not retried. Upload/commit requests are unaffected. Retry logs omit signed URLs.

@@ -167,6 +167,16 @@ def remux_original_quality(source, target):
         pending.replace(target)
 
 
+
+def audio_maps(before):
+    """Keep normal audio mapping; omit auxiliary APAC only with a default AAC fallback."""
+    audio = [s for s in before["streams"] if s.get("codec_type") == "audio"]
+    default_aac = any(s.get("codec_name") == "aac" and s.get("disposition", {}).get("default") == 1 for s in audio)
+    if default_aac and any(s.get("codec_name") == "apple_apac" for s in audio):
+        return [f"0:{int(s['index'])}" for s in audio if s.get("codec_name") != "apple_apac"]
+    return ["0:a?"]
+
+
 def encode(source, target, timestamp, crf=35, preset=8, threads=4, codec="hevc"):
     source, target = Path(source), Path(target)
     if target.exists():
@@ -197,8 +207,7 @@ def encode(source, target, timestamp, crf=35, preset=8, threads=4, codec="hevc")
             source,
             "-map",
             "0:v:0",
-            "-map",
-            "0:a?",
+            *[arg for stream in audio_maps(before) for arg in ("-map", stream)],
             "-map_metadata",
             "0",
             "-vf",
