@@ -274,6 +274,42 @@ def upload(
 
 @contextmanager
 def original_files(api, keys):
+    """Retry transient read-only exports before yielding any downloaded files."""
+    from contextlib import ExitStack
+    from http.client import IncompleteRead
+    import urllib.error
+
+    for attempt in range(4):
+        stack = ExitStack()
+        try:
+            files = stack.enter_context(_original_files_once(api, keys))
+        except (OSError, IncompleteRead) as error:
+            stack.close()
+            if isinstance(error, urllib.error.HTTPError):
+                retry = error.code in (429, 500, 502, 503, 504)
+            elif isinstance(error, urllib.error.URLError):
+                retry = isinstance(error.reason, (TimeoutError, ConnectionError))
+            else:
+                retry = isinstance(error, (TimeoutError, ConnectionError, IncompleteRead))
+            if not retry or attempt == 3:
+                raise
+            # Refresh the signed URL and discard every partial download. Never
+            # include the signed URL in retry logs or catch consumer failures.
+            print(json.dumps({"event": "original_export_retry", "attempt": attempt + 1}), flush=True)
+            time.sleep(2 ** attempt)
+            continue
+        except BaseException:
+            stack.close()
+            raise
+        try:
+            yield files
+        finally:
+            stack.close()
+        return
+
+
+@contextmanager
+def _original_files_once(api, keys):
     """True originals export. Legacy yCLA7/dnv2s may export compatibility JPEGs.
     pLFTfd returns a short-lived Google-signed ZIP URL; no cookies leave Chrome.
     """
