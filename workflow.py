@@ -131,3 +131,113 @@ def record_item_failure(worker, root, state, error, event, *, key, folder):
     worker.errors.append(key)
     worker.log(event, key=key, error=message)
     return False
+
+
+class SourceUnavailableError(RuntimeError):
+    """An individual original cannot currently be read; no source was removed."""
+
+
+class VideoPrefetch:
+    """Bounded, read-only lookahead. Only foreground workers encode or upload."""
+
+    def __init__(self, rows, prepare, eligible, estimate, stop_event, directory,
+                 *, size=2, max_bytes=2 * 1024 ** 3):
+        if type(size) is not int or not 1 <= size <= 4:
+            raise ValueError("Video prefetch must be between 1 and 4")
+        self.rows = iter(rows)
+        self.prepare_source = prepare
+        self.eligible = eligible
+        self.estimate = estimate
+        self.stop_event = stop_event
+        self.directory = Path(directory)
+        self.size, self.max_bytes = size, max_bytes
+        self.futures = {}
+        self.reserved = 0
+        self.lock = threading.RLock()
+        self.closed = False
+        self.failure = None
+
+    def __enter__(self):
+        self.pool = ThreadPoolExecutor(max_workers=min(2, self.size))
+        try:
+            with self.lock:
+                self._fill()
+        except BaseException:
+            self.pool.shutdown(wait=True, cancel_futures=True)
+            raise
+        return self
+
+    @staticmethod
+    def _item_error(error):
+        from http.client import IncompleteRead
+        from urllib.error import HTTPError, URLError
+
+        if isinstance(error, HTTPError):
+            return error.code in (429, 500, 502, 503, 504)
+        if isinstance(error, URLError):
+            return isinstance(error.reason, (TimeoutError, ConnectionError))
+        return isinstance(error, (SourceUnavailableError, TimeoutError, ConnectionError, IncompleteRead)) or str(error) == "TypeError: Failed to fetch"
+
+    def _prepare(self, row):
+        from concurrent.futures import CancelledError
+
+        if self.stop_event.is_set():
+            raise CancelledError()
+        try:
+            return self.prepare_source(row)
+        except Exception as error:
+            if not self._item_error(error):
+                with self.lock:
+                    self.failure = self.failure or error
+                    self.stop_event.set()
+            raise
+
+    def _fill(self):
+        import shutil
+
+        while not self.closed and not self.stop_event.is_set() and len(self.futures) < self.size:
+            row = next(self.rows, None)
+            if row is None:
+                return
+            if not self.eligible(row):
+                continue
+            # Export temporary files and their atomic backup can coexist.
+            # Oversized/unknown sources still run normally in the foreground.
+            cost = self.estimate(row)
+            if type(cost) is not int or cost <= 0:
+                continue
+            cost *= 2
+            available = shutil.disk_usage(self.directory).free - 1024 ** 3
+            if self.reserved + cost > min(self.max_bytes, available):
+                continue
+            key = row[0]
+            if key in self.futures:
+                raise RuntimeError("Duplicate source in video prefetch selection")
+            self.reserved += cost
+            self.futures[key] = (self.pool.submit(self._prepare, row), cost)
+
+    def check(self):
+        if self.failure is not None:
+            raise self.failure
+
+    def prepare(self, row):
+        with self.lock:
+            pair = self.futures.pop(row[0], None)
+        try:
+            self.check()
+            return pair[0].result() if pair else self.prepare_source(row)
+        finally:
+            with self.lock:
+                if pair:
+                    self.reserved -= pair[1]
+                self._fill()
+
+    def __exit__(self, kind, error, traceback):
+        with self.lock:
+            self.closed = True
+            for future, _ in self.futures.values():
+                future.cancel()
+        # Finish active atomic local backups before releasing the migration lock.
+        self.pool.shutdown(wait=True, cancel_futures=True)
+        if kind is None:
+            self.check()

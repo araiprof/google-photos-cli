@@ -113,6 +113,14 @@ Account or identity mismatches, corrupt/incomplete backups, changed outputs, une
 
 After unaffected work finishes, the command prints a deferred-item summary and exits 2. It does not run the completion path or claim a complete migration. A fresh audit still reports unresolved originals/replacements. A subsequent run uses the canonical journal recovery rules; it does not silently exclude ledger entries. Review exceptions and retain the original inventory and journals.
 
+## Bounded video prefetch
+
+Add `--video-prefetch 2` to a scoped combined `run` to download upcoming video originals while current assets encode, upload and verify. The default is 0 (disabled); 1–4 is supported. Selection, including year, filename, album and sample limit, is applied before the lookahead window is created. Completed conversions, pending replacements and committing journals are not downloaded again by prefetch.
+
+The window runs at most two background download workers. It reserves twice each source's reported size for the export temporary file and atomic backup, caps estimated lookahead reservations at 2 GiB, and leaves 1 GiB of disk headroom. Sources with unknown sizes or exceeding those estimates run normally in the foreground; they are not excluded. These are estimates, not a hard byte guarantee. Completed backups remain local as required. Use `--video-prefetch 0` to minimize local lookahead disk use, including with a single-asset cloud cohort.
+
+Prefetch never encodes, uploads, changes cloud metadata or deletes anything. Its only cloud requests fetch original metadata/exports. Foreground workers wait for each prepared source, then recheck its checksum before encoding. Existing commit reconciliation, upload bounds, verification and incremental source cleanup are unchanged. Known read-only item errors surface when that item reaches foreground processing; unexpected/account/integrity failures stop admission. On shutdown, queued downloads are cancelled and active atomic backups finish before the migration lock is released.
+
 ## Verification and performance
 
 When an input has auxiliary Apple APAC spatial audio alongside a default AAC track, encoding maps the other audio tracks explicitly and omits auxiliary APAC. This avoids requiring an unavailable APAC decoder for the existing stereo-compatible audio track. Without a default AAC fallback, the existing audio mapping remains unchanged; audio is never silently removed from an APAC-only source. The complete original file, including every audio track, remains in the local backup.

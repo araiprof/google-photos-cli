@@ -135,6 +135,10 @@ def parser():
     )
     encoding_options(combined)
     combined.add_argument(
+        "--video-prefetch", type=int, choices=range(0, 5), default=0, metavar="0..4",
+        help="Read-only lookahead for up to four upcoming video originals; 0 disables it",
+    )
+    combined.add_argument(
         "--continue-on-item-error", action="store_true",
         help="Defer known item-level failures, preserve journals, and finish other items; exits 2 if any are deferred",
     )
@@ -743,8 +747,24 @@ def main():
                         continue_on_item_error=args.continue_on_item_error)
         rows = selection.select(images.inventory, images.catalog)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        from contextlib import ExitStack
+        from workflow import VideoPrefetch
+        from migration import is_video
+
+        with ExitStack() as stack, concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            prefetch = None
+            if args.video_prefetch:
+                prefetch = stack.enter_context(VideoPrefetch(
+                    [row for row in rows if is_video(row)], videos.prepare_source,
+                    videos.needs_download, videos.download_size, stop, root,
+                    size=args.video_prefetch,
+                ))
+                videos.prefetch = prefetch
             for group in batches(rows, args.batch_size):
+                if prefetch is not None:
+                    prefetch.check()
+                if stop.is_set():
+                    raise SystemExit(2)
                 image_job = pool.submit(images.run, rows=group)
                 video_job = pool.submit(videos.run, rows=group)
                 try:
@@ -752,7 +772,9 @@ def main():
                 except BaseException:
                     stop.set()
                     raise
-                if any(errors or waiting for errors, waiting in outcomes):
+                if prefetch is not None:
+                    prefetch.check()
+                if any(errors or waiting for errors, waiting in outcomes) or stop.is_set():
                     stop.set()
                     raise SystemExit(2)
         deferred = images.deferred + videos.deferred if args.continue_on_item_error else []

@@ -63,6 +63,8 @@ uv run --locked google-photos-cli.py run --year current --apply --confirm-perman
 uv run --locked google-photos-cli.py run --apply --confirm-permanent-delete
 ```
 
+For overlapping video downloads with encoding, add `--video-prefetch 2` to a scoped combined `run`. This downloads upcoming originals only; uploads and source cleanup retain their existing cohort barriers. Prefetch is off by default and accepts a window of 1–4 originals.
+
 For long combined runs, `run --year 2023 --apply --continue-on-item-error` can log and defer known item failures while continuing unaffected items. It retains journals and backups, reports the deferred sources, and exits 2 rather than claiming completion. Account, backup, identity and deletion failures still stop writes. See [continuation and exception handling](docs/OPERATIONS.md#continuing-past-known-item-failures).
 
 `run`, `migrate`, and `videos` **preview by default**. Cloud uploads and moving originals to Trash require `--apply`. `--dry-run` always overrides `--apply`. A first preview can fetch the inventory and metadata, but never uploads or trashes media. With a complete cached snapshot, previews work offline.

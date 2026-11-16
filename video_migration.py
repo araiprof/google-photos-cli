@@ -47,7 +47,21 @@ class Videos:
             f.write(json.dumps(row) + "\n")
         print(json.dumps(row), flush=True)
 
-    def process(self, row):
+    def needs_download(self, row):
+        path = WORK / row[0] / "state.json"
+        if not path.exists():
+            return True
+        state = json.loads(path.read_text())
+        if state.get("account") != self.account or state.get("original_key") != row[0]:
+            raise RuntimeError("Video prefetch journal identity/account mismatch")
+        return (state.get("stage") not in ("trashed", "already_efficient", "committing")
+                and not state.get("replacement_key")
+                and not (state.get("source") and Path(state["source"]).exists()))
+
+    def download_size(self, row):
+        return at(self.cat, "items", row[0], 0, 5)
+
+    def prepare_source(self, row):
         key = row[0]
         f = WORK / key
         f.mkdir(exist_ok=True)
@@ -63,12 +77,13 @@ class Videos:
             raise RuntimeError(
                 "Video journal source identity does not match selected item"
             )
+        for field in ("original_ext", "original_info"):
+            if s.get(field) and at(s[field], 0, 0) != key:
+                raise RuntimeError("Video cached metadata source identity mismatch")
         if s.get("stage") in ("trashed", "already_efficient"):
             return
         if s.get("replacement_key"):
-            with self.lock:
-                self.waiting.append(s)
-            return
+            return s
         if not s.get("deletion_mode"):
             self.write(s, deletion_mode=self.selection.delete_mode)
         e = self.cat["items"][key]
@@ -84,7 +99,9 @@ class Videos:
         if not s.get("original_ext"):
             info = self.api.info(key)
             if not at(info, 0):
-                raise RuntimeError("Original source is unavailable")
+                from workflow import SourceUnavailableError
+
+                raise SourceUnavailableError("Original source is unavailable")
             if at(info, 0, 0) != key:
                 raise RuntimeError("Video original info identity mismatch")
             self.write(
@@ -97,6 +114,8 @@ class Videos:
                 original_bytes=er[5],
                 filename=er[2],
             )
+        if not s.get("source") or not s.get("output"):
+            self.write(s, source=s.get("source") or str(source), output=s.get("output") or str(target))
         if not source.exists():
             with original_files(self.api, [key]) as files:
                 data = [(n, p) for n, p in files if Path(n).suffix.lower() != ".json"]
@@ -122,6 +141,23 @@ class Videos:
                 original_sha256=sha(source),
                 original_backup_bytes=source.stat().st_size,
             )
+        if sha(source) != s["original_sha256"]:
+            raise RuntimeError("Video original backup changed; upload refused")
+        return s
+
+    def process(self, row):
+        prefetch = getattr(self, "prefetch", None)
+        s = prefetch.prepare(row) if prefetch is not None else self.prepare_source(row)
+        if s is None:
+            return
+        if s.get("replacement_key"):
+            with self.lock:
+                self.waiting.append(s)
+            return
+        key = row[0]
+        source, target = Path(s["source"]), Path(s["output"])
+        er = s["original_ext"][0]
+        # Recheck after the asynchronous handoff; the recorded backup is authoritative.
         if sha(source) != s["original_sha256"]:
             raise RuntimeError("Video original backup changed; upload refused")
         if not target.exists():
