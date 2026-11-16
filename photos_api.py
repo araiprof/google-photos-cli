@@ -327,11 +327,20 @@ def _original_files_once(api, keys):
         if response.status != 200:
             raise RuntimeError("Original-export HTTP " + str(response.status))
         with tempfile.TemporaryFile() as file:
+            from http.client import IncompleteRead
+
+            headers = getattr(response, "headers", {})
+            declared = headers.get("Content-Length")
+            expected_bytes = int(declared) if declared is not None else None
+            if expected_bytes is not None and expected_bytes < 0:
+                raise RuntimeError("Invalid original-export length")
             while True:
                 chunk = response.read(1024 * 1024)
                 if not chunk:
                     break
                 file.write(chunk)
+            if expected_bytes is not None and file.tell() != expected_bytes:
+                raise IncompleteRead(b"", max(0, expected_bytes - file.tell()))
             file.seek(0)
             if not zipfile.is_zipfile(file):
                 file.seek(0)

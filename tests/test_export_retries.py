@@ -50,3 +50,12 @@ class ExportRetries(unittest.TestCase):
                     with original_files(api,['source']) as files:
                         path=files[0][1];raise error
                 self.assertFalse(path.exists());self.assertEqual(api.rpc.call_count,1);pause.assert_not_called()
+
+
+    def test_silent_short_read_is_retried_before_files_are_yielded(self):
+        partial=Response(b'bad');partial.headers={'Content-Length':'100'}
+        complete=Response(b'complete');complete.headers={'Content-Length':'8'}
+        api=self.api()
+        with patch('urllib.request.urlopen',side_effect=[partial,complete]),patch('photos_api.time.sleep'):
+            with original_files(api,['source']) as files:self.assertEqual(files[0][1].read_bytes(),b'complete')
+        self.assertEqual(api.rpc.call_count,2);self.assertTrue(partial.closed)
