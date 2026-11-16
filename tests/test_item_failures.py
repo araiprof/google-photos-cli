@@ -181,3 +181,24 @@ class Deferral(unittest.TestCase):
                 self.assertEqual(state['error'],'Commit outcome unknown; reconcile using hash')
                 self.assertEqual(state['commit_transport_error'],message)
                 self.assertIsNone(state['replacement_key'])
+
+
+    def test_json_tuple_normalization_is_not_a_journal_mutation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);state=self.unavailable(root);state['display_size']=(640,480)
+            self.assertTrue(self.record(self.worker(root),root,state,'Original source is unavailable'))
+            saved=json.loads((root/'work-api/old/state.json').read_text())
+            self.assertEqual(saved['display_size'],[640,480])
+
+    def test_real_journal_change_still_blocks_deferral(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);state=self.unavailable(root);worker=self.worker(root)
+            original_write=worker.write
+            def changed_write(state,**kw):
+                original_write(state,**kw)
+                path=root/'work-api/old/state.json';saved=json.loads(path.read_text())
+                saved['stage']='unexpected';atomic_json(path,saved)
+            worker.write=changed_write
+            with self.assertRaisesRegex(RuntimeError,'journal changed'):
+                self.record(worker,root,state,'Original source is unavailable')
+            self.assertFalse((root/'deferred-items.json').exists())

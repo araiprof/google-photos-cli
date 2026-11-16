@@ -113,7 +113,7 @@ def record_item_failure(worker, root, state, error, event, *, key, folder):
         if key not in worker._failure_sources:
             raise RuntimeError("Deferred source differs from bound inventory")
         journal = root / folder / key / "state.json"
-        if json.loads(journal.read_text()) != state:
+        if json.loads(journal.read_text()) != json.loads(json.dumps(state)):
             raise RuntimeError("Deferred journal changed during inspection")
         with _failure_lock:
             path = root / "deferred-items.json"
